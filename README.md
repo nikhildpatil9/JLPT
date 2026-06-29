@@ -1335,3 +1335,188 @@ Use the updated `route.types.ts` and `router.tsx`; your role-based routing struc
 [1]: https://reactrouter.com/start/data/route-object?utm_source=chatgpt.com "Route Object"
 [2]: https://reactrouter.com/start/declarative/installation?utm_source=chatgpt.com "Installation"
 
+Yes. Create only this file:
+
+```txt
+src/api/dummyAuthApi.ts
+```
+
+This dummy API will return login response, user details, token, and roles.
+
+```ts
+// src/api/dummyAuthApi.ts
+
+import type {
+  LoginRequest,
+  LoginResponse,
+  User,
+} from "../auth/auth.types";
+
+const AUTH_STORAGE_KEY = "app_auth";
+
+/**
+ * Dummy database
+ * Later this data will come from real backend.
+ */
+const DUMMY_USERS: Array<User & { password: string }> = [
+  {
+    id: "1",
+    name: "Admin User",
+    email: "admin@test.com",
+    password: "admin123",
+    roles: ["ADMIN"],
+  },
+  {
+    id: "2",
+    name: "Manager User",
+    email: "manager@test.com",
+    password: "manager123",
+    roles: ["MANAGER"],
+  },
+  {
+    id: "3",
+    name: "Normal User",
+    email: "user@test.com",
+    password: "user123",
+    roles: ["USER"],
+  },
+];
+
+/**
+ * Simulates network delay
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Login API
+ */
+export async function loginApi(
+  payload: LoginRequest
+): Promise<LoginResponse> {
+  await delay(500);
+
+  const foundUser = DUMMY_USERS.find(
+    (user) =>
+      user.email === payload.email &&
+      user.password === payload.password
+  );
+
+  if (!foundUser) {
+    throw new Error("Invalid email or password");
+  }
+
+  const { password, ...userWithoutPassword } = foundUser;
+
+  const response: LoginResponse = {
+    accessToken: `dummy-token-${foundUser.id}`,
+    user: userWithoutPassword,
+  };
+
+  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
+
+  return response;
+}
+
+/**
+ * Current logged-in user API
+ * Used when app refreshes.
+ */
+export async function getCurrentUserApi(): Promise<LoginResponse | null> {
+  await delay(300);
+
+  const storedAuth = localStorage.getItem(AUTH_STORAGE_KEY);
+
+  if (!storedAuth) {
+    return null;
+  }
+
+  return JSON.parse(storedAuth) as LoginResponse;
+}
+
+/**
+ * Logout API
+ */
+export async function logoutApi(): Promise<void> {
+  await delay(200);
+
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+/**
+ * Optional dummy profile API
+ */
+export async function getProfileApi(): Promise<User | null> {
+  await delay(300);
+
+  const storedAuth = localStorage.getItem(AUTH_STORAGE_KEY);
+
+  if (!storedAuth) {
+    return null;
+  }
+
+  const auth = JSON.parse(storedAuth) as LoginResponse;
+
+  return auth.user;
+}
+```
+
+Required types:
+
+```ts
+// src/auth/auth.types.ts
+
+export type Role = "ADMIN" | "MANAGER" | "USER";
+
+export type User = {
+  id: string;
+  name: string;
+  email: string;
+  roles: Role[];
+};
+
+export type LoginRequest = {
+  email: string;
+  password: string;
+};
+
+export type LoginResponse = {
+  accessToken: string;
+  user: User;
+};
+
+export type AuthStatus = "loading" | "anonymous" | "authenticated";
+
+export type AuthState = {
+  user: User | null;
+  accessToken: string | null;
+  status: AuthStatus;
+};
+```
+
+Dummy login credentials:
+
+```txt
+ADMIN
+admin@test.com
+admin123
+
+MANAGER
+manager@test.com
+manager123
+
+USER
+user@test.com
+user123
+```
+
+Use this API inside `AuthProvider.tsx`:
+
+```ts
+import {
+  loginApi,
+  getCurrentUserApi,
+  logoutApi,
+} from "../api/dummyAuthApi";
+```
