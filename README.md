@@ -1004,9 +1004,334 @@ Backend
   real authorization
 ```
 
-This is the clean production pattern for your case: **same routes, same pages, but enabled/disabled by logged-in user role.**
+This error is because of this line from previous code:
 
-[1]: https://reactrouter.com/api/data-routers/createBrowserRouter?utm_source=chatgpt.com "createBrowserRouter"
-[2]: https://reactrouter.com/api/components/Outlet?utm_source=chatgpt.com "Outlet"
-[3]: https://reactrouter.com/api/data-routers/RouterProvider?utm_source=chatgpt.com "RouterProvider"
-[4]: https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html?utm_source=chatgpt.com "Authorization Cheat Sheet"
+```tsx
+const routeObject: RouteObject = {
+  id: route.id,
+  path: route.path,
+  index: route.index,
+  element: ...,
+  children: ...
+};
+```
+
+In React Router, `RouteObject` is internally treated differently for **index routes** and **normal routes**. Route objects are passed to `createBrowserRouter`, and index routes are special child routes that should use `index: true`. React Router documents route objects as the objects passed into `createBrowserRouter`. ([React Router][1])
+
+Use this corrected production version.
+
+---
+
+# 1. Fix `route.types.ts`
+
+Do **not** use:
+
+```ts
+index?: boolean;
+```
+
+Use a proper union type.
+
+```ts
+// src/routes/route.types.ts
+
+import type { ReactElement } from "react";
+import type { Role } from "../auth/auth.types";
+
+export type RouteAccess = "public" | "publicOnly" | "auth" | "roles";
+
+type BaseAppRoute = {
+  id: string;
+  element: ReactElement;
+
+  access: RouteAccess;
+  allowedRoles?: Role[];
+
+  title?: string;
+  showInMenu?: boolean;
+};
+
+export type IndexAppRoute = BaseAppRoute & {
+  index: true;
+  path?: never;
+  children?: never;
+};
+
+export type NonIndexAppRoute = BaseAppRoute & {
+  path?: string;
+  index?: false;
+  children?: AppRoute[];
+};
+
+export type AppRoute = IndexAppRoute | NonIndexAppRoute;
+```
+
+Important:
+
+```txt
+index route:
+  index: true
+  no path
+  no children
+
+normal/pathless route:
+  path optional
+  children allowed
+```
+
+---
+
+# 2. Fix `router.tsx`
+
+This is the main fix.
+
+```tsx
+// src/routes/router.tsx
+
+import { Suspense } from "react";
+import {
+  createBrowserRouter,
+  type RouteObject,
+} from "react-router";
+
+import { appRoutes } from "./appRoutes";
+import { AccessGuard } from "./AccessGuard";
+import type { AppRoute } from "./route.types";
+
+function withGuard(route: AppRoute) {
+  return (
+    <Suspense fallback={<PageLoader />}>
+      <AccessGuard
+        access={route.access}
+        allowedRoles={route.allowedRoles}
+      >
+        {route.element}
+      </AccessGuard>
+    </Suspense>
+  );
+}
+
+function buildReactRouterRoutes(routes: AppRoute[]): RouteObject[] {
+  return routes.map((route): RouteObject => {
+    if (route.index) {
+      return {
+        id: route.id,
+        index: true,
+        element: withGuard(route),
+      };
+    }
+
+    return {
+      id: route.id,
+      path: route.path,
+      element: withGuard(route),
+      children: route.children
+        ? buildReactRouterRoutes(route.children)
+        : undefined,
+    };
+  });
+}
+
+function PageLoader() {
+  return <div style={{ padding: 24 }}>Loading page...</div>;
+}
+
+export const router = createBrowserRouter(
+  buildReactRouterRoutes(appRoutes)
+);
+```
+
+This avoids the incompatible property issue because TypeScript can now clearly understand:
+
+```txt
+If index route:
+  return index route object
+
+Else:
+  return normal route object
+```
+
+---
+
+# 3. Correct `appRoutes.tsx`
+
+Make sure your index route looks like this:
+
+```tsx
+{
+  id: "home",
+  index: true,
+  element: <HomePage />,
+  access: "public",
+  title: "Home",
+  showInMenu: false,
+}
+```
+
+Do **not** write this:
+
+```tsx
+{
+  id: "home",
+  path: "",
+  index: true,
+  children: []
+}
+```
+
+That will create TypeScript conflict.
+
+Full example:
+
+```tsx
+// src/routes/appRoutes.tsx
+
+import { lazy } from "react";
+import type { AppRoute } from "./route.types";
+
+import { RootLayout } from "../layouts/RootLayout";
+import { AppLayout } from "../layouts/AppLayout";
+
+const HomePage = lazy(() => import("../pages/HomePage"));
+const LoginPage = lazy(() => import("../pages/LoginPage"));
+const DashboardPage = lazy(() => import("../pages/DashboardPage"));
+const ReportsPage = lazy(() => import("../pages/ReportsPage"));
+const UsersPage = lazy(() => import("../pages/UsersPage"));
+const ForbiddenPage = lazy(() => import("../pages/ForbiddenPage"));
+const NotFoundPage = lazy(() => import("../pages/NotFoundPage"));
+
+export const appRoutes: AppRoute[] = [
+  {
+    id: "root",
+    path: "/",
+    element: <RootLayout />,
+    access: "public",
+    children: [
+      {
+        id: "home",
+        index: true,
+        element: <HomePage />,
+        access: "public",
+      },
+      {
+        id: "login",
+        path: "login",
+        element: <LoginPage />,
+        access: "publicOnly",
+      },
+      {
+        id: "app",
+        element: <AppLayout />,
+        access: "auth",
+        children: [
+          {
+            id: "dashboard",
+            path: "dashboard",
+            element: <DashboardPage />,
+            access: "auth",
+            title: "Dashboard",
+            showInMenu: true,
+          },
+          {
+            id: "reports",
+            path: "reports",
+            element: <ReportsPage />,
+            access: "roles",
+            allowedRoles: ["ADMIN", "MANAGER"],
+            title: "Reports",
+            showInMenu: true,
+          },
+          {
+            id: "users",
+            path: "users",
+            element: <UsersPage />,
+            access: "roles",
+            allowedRoles: ["ADMIN"],
+            title: "Users",
+            showInMenu: true,
+          },
+        ],
+      },
+      {
+        id: "forbidden",
+        path: "403",
+        element: <ForbiddenPage />,
+        access: "public",
+      },
+      {
+        id: "not-found",
+        path: "*",
+        element: <NotFoundPage />,
+        access: "public",
+      },
+    ],
+  },
+];
+```
+
+---
+
+# 4. If you are using `react-router-dom`
+
+For React Router v6 projects, imports are usually from:
+
+```tsx
+import {
+  createBrowserRouter,
+  type RouteObject,
+} from "react-router-dom";
+```
+
+For newer React Router setup, docs now show `react-router`. The installation docs show `npm i react-router`. ([React Router][2])
+
+So use only one style depending on your package:
+
+```tsx
+// Option A - newer
+import { createBrowserRouter } from "react-router";
+
+// Option B - older/common v6
+import { createBrowserRouter } from "react-router-dom";
+```
+
+Do not mix both.
+
+---
+
+# Why Your Error Happened
+
+This is wrong for TypeScript:
+
+```tsx
+index: route.index,
+children: route.children,
+```
+
+Because TypeScript sees:
+
+```txt
+Maybe this is an index route
+Maybe this is a normal route
+Maybe it has children
+Maybe it has path
+```
+
+But React Router expects:
+
+```txt
+Index route:
+  index: true
+  no children
+
+Normal route:
+  path or pathless layout
+  children allowed
+```
+
+So the conditional return fixes it.
+
+Use the updated `route.types.ts` and `router.tsx`; your role-based routing structure will compile properly.
+
+[1]: https://reactrouter.com/start/data/route-object?utm_source=chatgpt.com "Route Object"
+[2]: https://reactrouter.com/start/declarative/installation?utm_source=chatgpt.com "Installation"
+
